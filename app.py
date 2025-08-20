@@ -1,4 +1,4 @@
-# app.py
+# app.py (version corrigée)
 import streamlit as st
 import numpy as np
 import pandas as pd
@@ -7,7 +7,7 @@ from CoolProp.CoolProp import PropsSI
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet
-import io, base64
+import io
 
 # Constantes
 Cp_eau = 4180  # J/kg.K
@@ -18,7 +18,18 @@ def K(x): return x + 273.15
 def C(x): return x - 273.15
 
 # =========================
-# FONCTIONS DE CALCUL
+# UTILITAIRE FORMATAGE
+# =========================
+def fmt(x, digits=2, unit=""):
+    try:
+        if x is None or (isinstance(x, float) and (np.isnan(x) or np.isinf(x))):
+            return "—"
+        return f"{x:.{digits}f}{unit}"
+    except Exception:
+        return "—"
+
+# =========================
+# FONCTION DE CALCUL
 # =========================
 def calc_cycle(fluide, P_evap_bar, P_cond_bar, 
                T1_C, Tliq_C,
@@ -63,7 +74,7 @@ def calc_cycle(fluide, P_evap_bar, P_cond_bar,
     h1 = PropsSI("H","P",P_evap,"T",T1,fluide)
     s1 = PropsSI("S","P",P_evap,"T",T1,fluide)
     h2s = PropsSI("H","P",P_cond,"S",s1,fluide)
-    h2 = h1 + (h2s - h1)/eta_isentropic
+    h2 = h1 + (h2s - h1)/max(eta_isentropic, 1e-6)
     T2 = PropsSI("T","P",P_cond,"H",h2,fluide)
     h3 = PropsSI("H","P",P_cond,"T",Tliq,fluide)
     h4 = h3
@@ -73,14 +84,17 @@ def calc_cycle(fluide, P_evap_bar, P_cond_bar,
     Qf = mdot_eau * Cp_eau * (T_eau_in - T_eau_out) / 1000  # kW
 
     # Débit frigo (approx à partir Qf)
-    h_evap_in = PropsSI("H","P",P_evap,"Q",0,fluide)
-    h_evap_out = h1
-    h_evap_diff = h_evap_out - h_evap_in
-    mdot_frigo = Qf*1000 / h_evap_diff if h_evap_diff>0 else 0
+    try:
+        h_evap_in = PropsSI("H","P",P_evap,"Q",0,fluide)
+        h_evap_out = h1
+        h_evap_diff = max(h_evap_out - h_evap_in, 0)
+        mdot_frigo = Qf*1000 / h_evap_diff if h_evap_diff>0 else 0
+    except:
+        mdot_frigo = 0
 
-    Wc = mdot_frigo*(h2-h1)/1000  # kW
+    Wc = mdot_frigo*max(h2-h1,0)/1000  # kW
     Qc = Qf + Wc
-    COP = Qf/Wc if Wc>0 else None
+    COP = (Qf/Wc) if Wc>0 else None
 
     return {
         "fluide": fluide,
@@ -204,26 +218,32 @@ unit=st.radio("Unité de débit eau",["m³/h","L/s"])
 flow=st.number_input("Débit d'eau",value=2.0)
 
 if st.button("Calculer"):
+    # Conversion du débit eau
     if unit=="m³/h":
         mdot=flow/3.6*rho_eau
     else:
         mdot=flow*rho_eau
 
+    if Teau_in <= Teau_out:
+        st.warning("⚠️ Pour un évaporateur, T eau entrée doit être > T eau sortie (ΔT > 0).")
+
     res=calc_cycle(fluide,P_ev,P_co,T1,Tliq,cond_type,ref_is_outlet,Tair_in,Tair_out,Teau_in,Teau_out,eta,mdot)
 
     st.subheader("Résultats")
-    st.write(f"**Surchauffe**: {res['surchauffe_K']:.2f} K")
-    st.write(f"**Sous-refroidissement**: {res['sous_refroid_K']:.2f} K")
-    st.write(f"**Pincement évap**: {res['pincement_evap_K']:.2f} K")
-    st.write(f"**Pincement condenseur**: {res['pincement_cond_K']:.2f} K")
-    st.write(f"**Qf**: {res['Qf_kW']:.2f} kW, **Wc**: {res['Wc_kW']:.2f} kW, **Qc**: {res['Qc_kW']:.2f} kW, **COP**: {res['COP']:.2f}")
+    st.write(f"**Surchauffe** : {fmt(res['surchauffe_K'])} K")
+    st.write(f"**Sous-refroidissement** : {fmt(res['sous_refroid_K'])} K")
+    st.write(f"**Pincement évap** : {fmt(res['pincement_evap_K'])} K")
+    st.write(f"**Pincement condenseur** : {fmt(res['pincement_cond_K'])} K")
+    st.write(f"**Qf** : {fmt(res['Qf_kW'])} kW  |  "
+             f"**Wc** : {fmt(res['Wc_kW'])} kW  |  "
+             f"**Qc** : {fmt(res['Qc_kW'])} kW  |  "
+             f"**COP** : {fmt(res['COP'])}")
 
-    plot_bars(res["Qf_kW"],res["Wc_kW"],res["Qc_kW"])
+    plot_bars(res.get("Qf_kW",0) or 0, res.get("Wc_kW",0) or 0, res.get("Qc_kW",0) or 0)
     plot_logph(fluide,res)
     plot_mollier(fluide,res)
 
-    # Exports
-    csv=export_csv(res)
-    pdf=export_pdf(res)
-    st.download_button("⬇️ Télécharger CSV",csv,"resultats.csv","text/csv")
-    st.download_button("⬇️ Télécharger PDF",pdf,"resultats.pdf","application/pdf")
+    csv = export_csv(res)
+    pdf = export_pdf(res)
+    st.download_button("⬇️ Télécharger CSV", csv, "resultats.csv", "text/csv")
+    st.download_button("⬇️ Télécharger PDF", pdf, "resultats.pdf", "application/pdf")
