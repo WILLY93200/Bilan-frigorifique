@@ -1,5 +1,6 @@
-streamlit
-coolprop
-matplotlib
-pandas
-reportlab
+streamlit>=1.36.0
+pandas>=2.2.0
+numpy>=1.26.0
+matplotlib>=3.8.0
+CoolProp>=6.6.0
+reportlab>=4.0.0
